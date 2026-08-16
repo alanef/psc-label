@@ -148,11 +148,42 @@ docker run -p 8080:8080 psc-label
 In Coolify, point an application at this repository and let it build from the
 Dockerfile. It listens on `$PORT` (8080 in the image) and answers `/healthz`.
 
-**Put an authenticating proxy in front of it.** The app itself has no login, and
-the CSVs contain members' names, boats and berth numbers. Cloudflare Zero Trust
+**Put an authenticating proxy in front of it.** The app has no login of its own,
+and the data is members' names, boats and berth numbers. Cloudflare Zero Trust
 with an email allowlist is the intended arrangement. This matters more once
 `SCM_EMAIL` and `SCM_PASSWORD` are set: the page then becomes a way to pull the
 mooring list out of SCM without knowing an SCM password.
+
+### Enforcing Cloudflare Access in the app as well
+
+Zero Trust at the edge only helps if every request actually goes through
+Cloudflare. A Coolify host publishes its proxy on 80/443 to the whole internet,
+so anyone who knows the hostname can point it straight at the origin IP and skip
+Access entirely:
+
+```
+curl --resolve labels.example.org:443:<origin-ip> https://labels.example.org/
+```
+
+Set these two and the app checks Cloudflare's signed token itself, so a request
+that skipped the edge gets a 403 whatever the network allows:
+
+| Variable | Meaning |
+|----------|---------|
+| `CF_ACCESS_TEAM_DOMAIN` | Your team, e.g. `myteam` or `https://myteam.cloudflareaccess.com` |
+| `CF_ACCESS_AUD` | The Access application's **Application Audience (AUD) tag**, from the Access dashboard |
+
+Both or neither: setting only one is a **startup failure**, not a silent
+fallback to "off". Someone who sets one of them is trying to lock the app down,
+and quietly serving it to the internet instead is the worst reading of that.
+
+`/healthz` stays open — the container's own health check never passes through
+Cloudflare, and it reveals nothing.
+
+This does not replace the network controls; it means a mistake in them is no
+longer enough on its own. Restricting the origin to Cloudflare's IP ranges, or
+publishing through a `cloudflared` tunnel so there is no origin port at all,
+remain worth doing.
 
 Uploaded and fetched CSVs and generated PDFs are held in memory only: the CSV is
 discarded once the labels are built, and the last few PDFs are kept under
@@ -183,6 +214,7 @@ Go 1.22 or newer. Dependencies are ordinary modules —
 | `psc-label.go` | HTTP server, handlers, config, in-memory PDF store |
 | `scm.go` | SCM CSV parsing: column matching, dates, building the labels |
 | `scmfetch.go` | Signing in to SCM and downloading the mooring export |
+| `access.go` | Verifying Cloudflare Access tokens, so the edge cannot be bypassed |
 | `pdf.go` | Label geometry and PDF rendering |
 | `templates/index.html` | The whole UI, embedded into the binary at build time |
 

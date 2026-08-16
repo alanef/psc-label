@@ -116,9 +116,24 @@ func main() {
 		log.Fatalf("psc-label: %v", err)
 	}
 
+	// Cloudflare Access, checked here as well as at the edge. Startup is the
+	// right place to be fatal: a misconfiguration must stop the program, not
+	// quietly serve members' details to anyone who finds the origin.
+	accessCfg, err := loadAccessConfig()
+	if err != nil {
+		log.Fatalf("psc-label: %v", err)
+	}
+	var handler http.Handler = srv.routes()
+	if accessCfg.Enforced {
+		handler = newAccessVerifier(accessCfg).middleware(handler)
+		log.Printf(">>>> Cloudflare Access enforced for %s — requests without a valid token are refused", accessCfg.Issuer)
+	} else {
+		log.Println(">>>> Cloudflare Access is NOT enforced by this program. That is right for a laptop; if this copy is reachable from the internet, set CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD.")
+	}
+
 	httpServer := &http.Server{
 		Addr:              ":" + port,
-		Handler:           recoverPanic(srv.routes()),
+		Handler:           recoverPanic(handler),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Generous: a bulk run of a thousand labels takes a few seconds.
 		WriteTimeout: 2 * time.Minute,

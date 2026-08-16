@@ -74,6 +74,32 @@ cannot silently re-point a column.
 Tests run against a fake SCM built in `scmfetch_test.go`. Do not point a test at
 the live system.
 
+## Cloudflare Access
+
+`access.go` verifies the token Cloudflare signs into every request it lets
+through, so a request that reached the origin directly is refused even when the
+port is open. It exists because that bypass was found to be live in Aug 2026:
+the hostname resolved to the origin IP and the app answered `200`.
+
+It is written to fail closed, and must stay that way.
+
+- The signing algorithm is **pinned to RS256** and never read from the token.
+  Trusting the token's own `alg` is the classic JWT break — `none` skips
+  verification, and an HMAC algorithm lets the public key be used as the signing
+  secret. `TestAccessRefusesBadTokens` covers both.
+- Issuer, audience and expiry are all checked. A token with no `exp` is refused
+  rather than treated as eternal.
+- Half a configuration is a **startup error**. Do not turn it into a warning.
+- `/healthz` is the only exempt route, because Docker's health check runs inside
+  the container.
+- The token is a bearer credential naming a real person: never log it, never
+  echo it into a response.
+
+The tests generate their own RSA key and serve their own key set, so they need
+no network. Most of them are about what must be **refused**; a verifier that
+accepts forgeries is worse than none, because it invites turning the network
+controls off.
+
 ## Style
 
 - Match the surrounding code: tabs, plain `net/http` and `html/template`, no
