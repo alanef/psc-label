@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/csv"
 	"encoding/hex"
@@ -54,6 +55,12 @@ type Page struct {
 	Summary      string   // e.g. "282 labels generated"
 	Labelfile    string   // URL of the generated PDF, empty if none
 	Downloadfile string   // same PDF, as an attachment
+
+	// Fetch-from-SCM panel. Filled in by render for every page.
+	Fetcherr  []string
+	ShowFetch bool   // the panel is offered at all
+	AskLogin  bool   // no credentials in the environment, so ask on the page
+	SCMHost   string // shown so it is obvious which system is about to be contacted
 }
 
 // server holds everything the handlers share. The original kept the current
@@ -63,6 +70,7 @@ type server struct {
 	tmpl  *template.Template
 	pdfs  *pdfStore
 	start time.Time
+	scm   scmConfig
 }
 
 func newServer() (*server, error) {
@@ -70,7 +78,7 @@ func newServer() (*server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing embedded template: %w", err)
 	}
-	return &server{tmpl: tmpl, pdfs: newPDFStore(8), start: time.Now()}, nil
+	return &server{tmpl: tmpl, pdfs: newPDFStore(8), start: time.Now(), scm: loadSCMConfig()}, nil
 }
 
 func (s *server) routes() *http.ServeMux {
@@ -79,6 +87,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("/printsingle", s.handleSingle)
 	mux.HandleFunc("/printbulk", s.handleBulk)
 	mux.HandleFunc("/printnumber", s.handleNumber)
+	mux.HandleFunc("/printfetch", s.handleFetch)
 	mux.HandleFunc("/label/", s.handleLabelPDF)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
@@ -169,6 +178,9 @@ func recoverPanic(next http.Handler) http.Handler {
 // render writes the page. A template failure is logged rather than fatal.
 func (s *server) render(w http.ResponseWriter, p Page) {
 	p.Year = time.Now().Year()
+	p.ShowFetch = !s.scm.Disabled
+	p.AskLogin = !s.scm.FromEnv
+	p.SCMHost = s.scm.BaseURL
 
 	// Render to a buffer first so a mid-render error cannot leave a half-built
 	// page on the wire.
@@ -323,16 +335,26 @@ func (s *server) handleBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.printMoorings(w, moorings, boats, "that mooring file — check you downloaded the right one",
+		func(p *Page, msg string) { p.Bulkerr = append(p.Bulkerr, msg) })
+}
+
+// printMoorings turns a mooring export (and optionally a boats export) into the
+// label PDF. Shared by the upload form and the fetch-from-SCM button, so both
+// routes report problems and warnings identically. source names the origin of
+// the data for the "nothing current in it" message.
+func (s *server) printMoorings(w http.ResponseWriter, moorings, boats [][]string, source string, setErr func(*Page, string)) {
 	result, err := buildLabels(moorings, boats, time.Now())
 	if err != nil {
-		s.render(w, Page{Bulkerr: []string{err.Error()}, Notes: result.Notes})
+		page := Page{Notes: result.Notes}
+		setErr(&page, err.Error())
+		s.render(w, page)
 		return
 	}
 	if len(result.Labels) == 0 {
-		s.render(w, Page{
-			Bulkerr: []string{fmt.Sprintf("No current licences found in that mooring file — %d rows were outside their licence dates or unusable. Check you downloaded the right file.", result.Skipped)},
-			Notes:   result.Notes, Warnings: result.Warnings,
-		})
+		page := Page{Notes: result.Notes, Warnings: result.Warnings}
+		setErr(&page, fmt.Sprintf("No current licences found in %s — %d rows were outside their licence dates or unusable.", source, result.Skipped))
+		s.render(w, page)
 		return
 	}
 
@@ -346,7 +368,81 @@ func (s *server) handleBulk(w http.ResponseWriter, r *http.Request) {
 	page := Page{Notes: result.Notes, Warnings: result.Warnings}
 	summary := fmt.Sprintf("%d labels for %d moorings (2 copies each); %d rows skipped as not current.",
 		len(result.Labels)*2, len(result.Labels), result.Skipped)
-	s.finish(w, pdf, page, func(p *Page, msg string) { p.Bulkerr = append(p.Bulkerr, msg) }, summary)
+	s.finish(w, pdf, page, setErr, summary)
+}
+
+// handleFetch signs in to SCM, downloads the mooring export and prints it, in
+// one click. The upload form remains the fallback for when SCM changes.
+func (s *server) handleFetch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	setErr := func(p *Page, msg string) { p.Fetcherr = append(p.Fetcherr, msg) }
+
+	if s.scm.Disabled {
+		page := Page{}
+		setErr(&page, "Fetching from SCM is switched off on this copy.")
+		s.render(w, page)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		page := Page{}
+		setErr(&page, "Could not read that form.")
+		s.render(w, page)
+		return
+	}
+
+	// Environment credentials win; otherwise take them from the form and let
+	// them fall out of scope when this handler returns. Either way they are
+	// never written down and never logged.
+	creds := s.scm.Env
+	if !s.scm.FromEnv {
+		creds = scmCredentials{
+			Email:    strings.TrimSpace(r.PostFormValue("scm_email")),
+			Password: r.PostFormValue("scm_password"),
+		}
+	}
+	if creds.Email == "" || creds.Password == "" {
+		page := Page{}
+		setErr(&page, "Enter the SCM email address and password to fetch from SCM.")
+		s.render(w, page)
+		return
+	}
+
+	client, err := newSCMClient(s.scm.BaseURL)
+	if err != nil {
+		page := Page{}
+		setErr(&page, err.Error())
+		s.render(w, page)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), scmFetchTimeout)
+	defer cancel()
+
+	moorings, err := client.fetchMoorings(ctx, creds)
+	if err != nil {
+		// Logged without the credentials, and without the error's own text for
+		// a rejected login, which is the only case SCM could echo an email back.
+		log.Printf("scm fetch failed: %s", logSafeFetchError(err))
+		page := Page{}
+		setErr(&page, err.Error())
+		s.render(w, page)
+		return
+	}
+
+	s.printMoorings(w, moorings, nil, "the mooring export fetched from SCM", setErr)
+}
+
+// logSafeFetchError keeps a rejected login out of the log entirely, in case a
+// future SCM error page were to quote the email address back at us.
+func logSafeFetchError(err error) string {
+	if errors.Is(err, errSCMLogin) {
+		return "SCM rejected the credentials"
+	}
+	return err.Error()
 }
 
 // finish renders the PDF, stores it and shows the page. setErr lets each
@@ -393,6 +489,13 @@ func readCSV(r *http.Request, field string) ([][]string, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%q is empty", header.Filename)
 	}
+	return parseCSV(data, header.Filename)
+}
+
+// parseCSV reads CSV leniently: ragged rows and stray quotes are tolerated,
+// because these files are often opened and re-saved in Excel before being
+// uploaded. name is only used to describe the source in an error.
+func parseCSV(data []byte, name string) ([][]string, error) {
 	// Excel writes a UTF-8 byte order mark, which would otherwise become part
 	// of the first header name and break column matching.
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
@@ -403,7 +506,7 @@ func readCSV(r *http.Request, field string) ([][]string, error) {
 
 	rows, err := reader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("could not read %q as CSV: %w", header.Filename, err)
+		return nil, fmt.Errorf("could not read %q as CSV: %w", name, err)
 	}
 	return rows, nil
 }

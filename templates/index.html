@@ -910,6 +910,35 @@
   word-wrap: break-word;
 }
 
+/* The upload form is now the fallback, folded away behind a <details>. Plain
+   HTML rather than a scripted accordion: it still opens if scripting is off,
+   and it opens itself when there is an error to show. */
+.fallback > summary {
+  cursor: pointer;
+  list-style: none;
+  color: #555;
+}
+
+.fallback > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fallback > summary h2 {
+  display: inline;
+  font-size: 2.4rem;
+  color: #555;
+}
+
+.fallback > summary::before {
+  content: "\25B6\00a0";
+  font-size: 1.4rem;
+  color: #999;
+}
+
+.fallback[open] > summary::before {
+  content: "\25BC\00a0";
+}
+
 
 
   <!-- Favicon
@@ -970,6 +999,24 @@
           <p class="summary">{{ . }}</p>
         </div>
       {{ end }}
+      {{/* Warnings and column notes belong to whichever run just happened —
+           fetched or uploaded — so they live with the result, not inside the
+           upload accordion where a fetch would never show them. */}}
+      {{ with .Warnings}}
+        <div class="row">
+          <p class="warning">
+            <strong>Some rows were skipped:</strong>
+            {{ range .}}<span>{{.}}</span>{{end}}
+          </p>
+        </div>
+      {{ end }}
+      {{ with .Notes}}
+        <div class="row">
+          <p class="columnnotes">
+            Columns used: {{ range .}}{{.}} {{end}}
+          </p>
+        </div>
+      {{ end }}
       {{ with .Labelfile }}
         <iframe id="iFramePdf" src="{{ . }}" style="height: 250px"></iframe>
         <div class="row">
@@ -992,36 +1039,74 @@
      {{ end }}
 
   </div>
+  {{ if or .ShowFetch .Fetcherr }}
   <div class="row">
       <div class="twelve columns">
       <hr>
       <div class="row">
-        <h2>Bulk Labels</h2>
+        <h2>Fetch from SCM</h2>
       </div>
+      {{ with .Fetcherr }}
       <div class="row">
-			     <p>Bulk labels are driven from the Mooring Allocations CSV. Download it from SCM with the button below, upload it, and process — that one file is all you need.</p>
-				 <p>The Boats CSV is optional. It is the better source for boat names and members, so upload it as well if you have it; without it the names come from the mooring rows themselves.
-				 You can remove unwanted rows from the Mooring CSV before printing, or sort it in a spreadsheet and re-save as CSV, but do not delete the header row.</p>
+        <p class="error">
+          {{ range .}}<span>{{.}}</span>{{end}}
+        </p>
+      </div>
+      {{ end }}
+      {{ if .ShowFetch }}
+      <div class="row">
+        <p>This does the whole job in one go: it signs in to <strong>{{ .SCMHost }}</strong>, downloads the current mooring
+        allocations and prints the labels. Only the seven columns a label needs are requested — no invoices, prices or member IDs.</p>
+        {{ if .AskLogin }}
+        <p>Your SCM login is used for this one request only. It is not saved, not written to disk and not written to the log.</p>
+        {{ else }}
+        <p>This copy has an SCM login configured, so no password is needed here.</p>
+        {{ end }}
+        <form action="/printfetch" method="post">
+          <div class="row">
+            {{ if .AskLogin }}
+            <div class="four columns">
+              <label for="scm_email">SCM email address</label>
+              <input class="u-full-width" type="email" name="scm_email" id="scm_email" autocomplete="off">
+            </div>
+            <div class="four columns">
+              <label for="scm_password">SCM password</label>
+              <input class="u-full-width" type="password" name="scm_password" id="scm_password" autocomplete="off">
+            </div>
+            {{ end }}
+            <div class="four columns">
+              <label for="fetchsubmit">&nbsp;</label>
+              <input class="button-primary" type="submit" id="fetchsubmit" value="Fetch from SCM and print">
+            </div>
+          </div>
+        </form>
+        <p>It takes around ten seconds. If SCM changes and this stops working, the upload below still does the job.</p>
+      </div>
+      {{ end }}
+    </div>
+  </div>
+  {{ end }}
+
+  <div class="row">
+      <div class="twelve columns">
+      <hr>
+      <details class="fallback"{{ if .Bulkerr }} open{{ end }}>
+        <summary><h2>Upload the CSV instead</h2></summary>
+        <div class="row">
+          <p>The fallback for when SCM changes and the button above stops working. Download the Mooring Allocations CSV
+          from SCM, upload it here and process — that one file is all you need. You can remove unwanted rows or sort it
+          in a spreadsheet first, but do not delete the header row.</p>
           <form action="/printbulk" method="post" enctype="multipart/form-data">
             <div class="row">
               <div class="four columns">
 							  <div class="row">
-								  <a href="https://papercourtsc.clubmin.net/moorings/export_setup" target="_blank" class="button">Download SCM Moorings</a>
+								  <a href="{{ .SCMHost }}/moorings/export_setup" target="_blank" class="button">Download SCM Moorings</a>
 								</div>
 								<div class="row">
 	                <label for="Name">Mooring Allocations CSV</label>
 	                <input class="u-full-width" type="file" name="BerthFile">
 								</div>
               </div>
-              <div class="four columns">
-								<div class="row">
-									<a href="https://papercourtsc.clubmin.net/boats/export" target="_blank" class="button">Download SCM Boats</a>
-								</div>
-								<div class="row">
-	                <label for="Boat">Boat CSV (optional)</label>
-	                <input class="u-full-width" type="file"  name="BoatFile">
-	              </div>
-							</div>
               <div class="four columns">
                <label for="submit">&nbsp;</label>
                <input class="button-primary" type="submit" value="Process">
@@ -1035,22 +1120,8 @@
             </p>
           </div>
           {{ end }}
-          {{ with .Warnings}}
-          <div class="row">
-            <p class="warning">
-              <strong>Some rows were skipped:</strong>
-              {{ range .}}<span>{{.}}</span>{{end}}
-            </p>
-          </div>
-          {{ end }}
-          {{ with .Notes}}
-          <div class="row">
-            <p class="columnnotes">
-              Columns used: {{ range .}}{{.}} {{end}}
-            </p>
-          </div>
-          {{ end }}
-      </div>
+        </div>
+      </details>
    </div>
  </div>
  <div class="row" id="number">

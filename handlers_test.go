@@ -449,3 +449,165 @@ func TestPDFStoreIDsAreUnguessable(t *testing.T) {
 		t.Errorf("id %q is too short to be unguessable", a)
 	}
 }
+
+// Fetch-from-SCM, driven through the real handler against the fake SCM in
+// scmfetch_test.go. The live system is never contacted by the tests.
+
+func newFetchTestServer(t *testing.T, scmURL string, envCreds bool) *httptest.Server {
+	t.Helper()
+	t.Setenv("SCM_BASE_URL", scmURL)
+	t.Setenv("SCM_FETCH", "")
+	if envCreds {
+		t.Setenv("SCM_EMAIL", fakeEmail)
+		t.Setenv("SCM_PASSWORD", fakePassword)
+	} else {
+		t.Setenv("SCM_EMAIL", "")
+		t.Setenv("SCM_PASSWORD", "")
+	}
+	return newTestServer(t)
+}
+
+func TestFetchPanelAsksForLoginWhenNoneConfigured(t *testing.T) {
+	ts := newFetchTestServer(t, "https://scm.example", false)
+
+	resp, err := ts.Client().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	for _, want := range []string{"Fetch from SCM", `name="scm_email"`, `name="scm_password"`, "scm.example"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("page does not contain %q", want)
+		}
+	}
+}
+
+func TestFetchPanelHidesLoginWhenConfigured(t *testing.T) {
+	ts := newFetchTestServer(t, "https://scm.example", true)
+
+	resp, err := ts.Client().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if !strings.Contains(string(body), "Fetch from SCM") {
+		t.Error("fetch panel should still be offered")
+	}
+	if strings.Contains(string(body), `name="scm_password"`) {
+		t.Error("password field should not be shown when credentials come from the environment")
+	}
+	// The configured password must never be rendered into the page.
+	if strings.Contains(string(body), fakePassword) {
+		t.Fatal("the configured SCM password was rendered into the page")
+	}
+}
+
+func TestFetchHandlerHappyPath(t *testing.T) {
+	_, scm := newFake(t)
+	ts := newFetchTestServer(t, scm.URL, true)
+
+	status, body := post(t, ts, "/printfetch", url.Values{})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if !strings.Contains(body, "2 moorings") {
+		t.Errorf("summary missing from page: %s", firstError(body))
+	}
+	if pdf := fetchGeneratedPDF(t, ts, body); len(pdf) == 0 {
+		t.Error("no PDF generated")
+	}
+}
+
+func TestFetchHandlerRejectedLoginSurvives(t *testing.T) {
+	f, scm := newFake(t)
+	f.rejectLogin = true
+	ts := newFetchTestServer(t, scm.URL, false)
+
+	status, body := post(t, ts, "/printfetch", url.Values{
+		"scm_email":    {fakeEmail},
+		"scm_password": {fakePassword},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with the error on the page", status)
+	}
+	if !strings.Contains(body, "would not accept those login details") {
+		t.Errorf("login failure not reported on the page")
+	}
+	if strings.Contains(body, fakePassword) {
+		t.Fatal("the submitted password was echoed back into the page")
+	}
+	assertStillServing(t, ts)
+}
+
+func TestFetchHandlerNeedsCredentials(t *testing.T) {
+	_, scm := newFake(t)
+	ts := newFetchTestServer(t, scm.URL, false)
+
+	status, body := post(t, ts, "/printfetch", url.Values{"scm_email": {fakeEmail}})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if !strings.Contains(body, "Enter the SCM email address and password") {
+		t.Error("missing password should be reported on the page")
+	}
+	assertStillServing(t, ts)
+}
+
+func TestFetchHandlerUnreachableSCMSurvives(t *testing.T) {
+	// A port nothing is listening on: the handler must report it, not die.
+	ts := newFetchTestServer(t, "http://127.0.0.1:1", true)
+
+	status, body := post(t, ts, "/printfetch", url.Values{})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with the error on the page", status)
+	}
+	if !strings.Contains(body, "could not") && !strings.Contains(body, "Could not") {
+		t.Errorf("unreachable SCM not reported: %s", firstError(body))
+	}
+	if strings.Contains(body, fakePassword) {
+		t.Fatal("the configured password reached the page")
+	}
+	assertStillServing(t, ts)
+}
+
+func TestFetchCanBeSwitchedOff(t *testing.T) {
+	_, scm := newFake(t)
+	t.Setenv("SCM_BASE_URL", scm.URL)
+	t.Setenv("SCM_EMAIL", fakeEmail)
+	t.Setenv("SCM_PASSWORD", fakePassword)
+	t.Setenv("SCM_FETCH", "off")
+	ts := newTestServer(t)
+
+	resp, err := ts.Client().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "Fetch from SCM and print") {
+		t.Error("the fetch panel should be hidden when SCM_FETCH=off")
+	}
+
+	status, page := post(t, ts, "/printfetch", url.Values{})
+	if status != http.StatusOK || !strings.Contains(page, "switched off") {
+		t.Errorf("disabled fetch should say so: status %d", status)
+	}
+	assertStillServing(t, ts)
+}
+
+// firstError pulls the error text out of a rendered page, for test messages.
+func firstError(body string) string {
+	i := strings.Index(body, `class="error"`)
+	if i < 0 {
+		return "(no error box on the page)"
+	}
+	end := i + 300
+	if end > len(body) {
+		end = len(body)
+	}
+	return body[i:end]
+}
