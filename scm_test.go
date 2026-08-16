@@ -239,6 +239,95 @@ var realBoatsHeader = []string{
 	"Berth/Space Group", "Start", "End",
 }
 
+// realMooringHeader is the header row of the SCM mooring allocations export of
+// 16 Aug 2026, verbatim. Note it no longer matches the 2017 positions: SCM
+// inserted "Allocation Contact ID" ahead of the dates, which is what broke
+// bulk printing.
+var realMooringHeader = []string{
+	"ID", "Name", "Type", "Group", "Note", "Latitude", "Longitude",
+	"Max Length (m)", "Max Width (m)", "Max Draught (m)", "Max Height (m)",
+	"Max Weight (kg)", "Allocation ID", "Allocation Boat", "Allocation Design",
+	"Allocation Contact", "Allocation Contact ID", "Allocation Boat ID",
+	"Allocation From", "Allocation Until", "Allocation Price",
+	"Allocation Price Name", "Allocation Invoice", "Allocation Outstanding",
+	"Allocation Disc Nunber", "Allocation Status", "Allocation Status Set At",
+}
+
+func TestResolveColumnsAgainstRealMooringExport(t *testing.T) {
+	cols := resolveColumns(realMooringHeader, mooringColumns)
+
+	want := map[string]int{
+		"berthnumber":       1,  // Name
+		"bertharea":         3,  // Group
+		"boatid":            17, // Allocation Boat ID
+		"start":             18, // Allocation From
+		"end":               19, // Allocation Until
+		"allocationboat":    13,
+		"allocationcontact": 15,
+	}
+	for key, pos := range want {
+		if got := cols.index[key]; got != pos {
+			t.Errorf("%s resolved to column %d (%q), want %d (%q)",
+				key, got, realMooringHeader[got], pos, realMooringHeader[pos])
+		}
+		if !cols.matchedByName(key) {
+			t.Errorf("%s should match by header name, not fall back to a position", key)
+		}
+	}
+
+	// The historic positions must NOT be used against this file: column 16 is
+	// a contact ID, and feeding it to the date parser is the original bug.
+	if cols.index["start"] == 16 {
+		t.Error("start date resolved to the 2017 position, which is now Allocation Contact ID")
+	}
+}
+
+// A boat that is in the moorings file but incomplete in the boats file should
+// still get a full label — three of the club's 406 allocations are like this.
+func TestGapsInBoatsFileAreFilledFromMooringRow(t *testing.T) {
+	moorings := [][]string{realMooringHeader, make([]string, len(realMooringHeader))}
+	row := moorings[1]
+	row[1], row[3] = "530", "C"
+	row[13], row[15] = "Container 146", "Craig Adams"
+	row[17], row[18], row[19] = "407587", "01/Jan/2026", "31/Dec/2026"
+
+	// The boat exists but has no name and no contact of any kind.
+	boats := [][]string{realBoatsHeader, make([]string, len(realBoatsHeader))}
+	boats[1][0] = "407587"
+
+	res, err := buildLabels(moorings, boats, testNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Labels) != 1 {
+		t.Fatalf("got %d labels, want 1", len(res.Labels))
+	}
+	if res.Labels[0].Name != "Craig Adams" || res.Labels[0].Boat != "Container 146" {
+		t.Errorf("label = %+v, want the boat and contact from the mooring row", res.Labels[0])
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "fixing in SCM") {
+		t.Errorf("expected a warning pointing at the SCM record, got %v", res.Warnings)
+	}
+}
+
+// Those same columns must NOT be read from a file whose layout was guessed by
+// position — at 13 and 15 in the old layout they mean something else.
+func TestMooringFallbackColumnsIgnoredWhenLayoutIsGuessed(t *testing.T) {
+	moorings := [][]string{
+		historicHeader(18), // meaningless headers, so everything falls back
+		historicMooringRow("147", "C", "MISSING", "01/Jan/2026", "31/Dec/2026"),
+	}
+	boats := [][]string{historicHeader(45), historicBoatRow("B1", "Solo:1", "", "Zoe Adams")}
+
+	res, err := buildLabels(moorings, boats, testNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Labels[0].Name != "" || res.Labels[0].Boat != "" {
+		t.Errorf("label = %+v, want blanks rather than data read from unidentified columns", res.Labels[0])
+	}
+}
+
 // Pin the real export layout so a change to the alias lists cannot silently
 // re-point a column.
 func TestResolveColumnsAgainstRealBoatsExport(t *testing.T) {

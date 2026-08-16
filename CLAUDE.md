@@ -55,6 +55,19 @@ them:
 2017 positions (mooring 1/3/15/16/17, boats 0/1/33/44) are the fallbacks and
 should not be changed — they are the last resort when no header matches.
 
+**The mooring export has already drifted.** In the 16 Aug 2026 file, SCM had
+inserted "Allocation Contact ID" ahead of the dates, so the 2017 positions
+15/16/17 now land on "Allocation Contact", "Allocation Contact ID" and
+"Allocation Boat ID". The old code fed a contact ID to `time.Parse` and called
+`log.Fatal` on the result — that is the whole story of the crash. Both real
+header rows are pinned in `scm_test.go` (`realMooringHeader`, `realBoatsHeader`)
+so an alias edit cannot silently re-point a column.
+
+`allocationboat` and `allocationcontact` are optional (fallback `-1`): the
+mooring row's own copy of the boat and member, used only to fill gaps in the
+boats file, and only when matched by header name — at positions 13 and 15 in the
+old layout they mean something else.
+
 When a real export shows the matching is wrong, add the actual header text to
 the relevant alias list rather than changing a fallback. Aliases are compared
 after `normaliseHeader`, which lowercases and strips everything but letters and

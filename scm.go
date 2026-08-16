@@ -21,13 +21,27 @@ type columnSpec struct {
 	fallback int      // column position used when no header matches
 }
 
-// Mooring allocations export.
+// Mooring allocations export. Verified against the SCM export of 16 Aug 2026,
+// which has 27 columns headed "ID", "Name", "Type", "Group", ... "Allocation
+// Boat ID", "Allocation From", "Allocation Until".
+//
+// This export has moved since 2017: SCM inserted "Allocation Contact ID"
+// ahead of the dates, so the historic positions 15/16/17 now land on
+// "Allocation Contact", "Allocation Contact ID" and "Allocation Boat ID". That
+// is precisely why bulk printing broke — the old code fed a contact ID to the
+// date parser. The historic positions stay as a last resort for an archived
+// file, but the SCM names below are what should match.
 var mooringColumns = []columnSpec{
-	{"berthnumber", []string{"berthnumber", "berthno", "berth", "mooringnumber", "mooringno", "number", "no"}, 1},
-	{"bertharea", []string{"bertharea", "area", "mooringarea", "section", "zone", "row"}, 3},
-	{"boatid", []string{"boatid", "boat", "boatref", "boatreference"}, 15},
-	{"start", []string{"startdate", "start", "from", "fromdate", "licencestart", "licensestart", "validfrom"}, 16},
-	{"end", []string{"enddate", "end", "to", "todate", "licenceend", "licenseend", "validto", "expiry", "expirydate", "expires"}, 17},
+	{"berthnumber", []string{"berthnumber", "berthno", "mooringnumber", "mooringno", "berthname", "mooringname", "spacename", "name", "berth", "number", "no"}, 1},
+	{"bertharea", []string{"bertharea", "mooringarea", "berthgroup", "mooringgroup", "spacegroup", "group", "area", "section", "zone", "row"}, 3},
+	{"boatid", []string{"allocationboatid", "boatid", "boatref", "boatreference", "boat"}, 15},
+	{"start", []string{"allocationfrom", "startdate", "start", "fromdate", "from", "licencestart", "licensestart", "validfrom"}, 16},
+	{"end", []string{"allocationuntil", "enddate", "end", "todate", "to", "until", "licenceend", "licenseend", "validto", "expiry", "expirydate", "expires"}, 17},
+	// The mooring row carries its own copy of the boat and the member. These
+	// are only used when the boat is missing from the boats file, and only
+	// when they were matched by header name — see buildLabels.
+	{"allocationboat", []string{"allocationboat"}, -1},
+	{"allocationcontact", []string{"allocationcontact"}, -1},
 }
 
 // Boats export. Verified against the SCM export of 16 Aug 2026, which has 53
@@ -58,9 +72,15 @@ func normaliseHeader(s string) string {
 
 // columnMap is the resolved position of each column we need.
 type columnMap struct {
-	index map[string]int
-	notes []string // human-readable account of how each column was resolved
+	index  map[string]int
+	byName map[string]bool // true when matched by header name, not by position
+	notes  []string        // human-readable account of how each column was resolved
 }
+
+// matchedByName reports whether a column was found by its header rather than
+// guessed from its historic position. A column whose meaning depends on the
+// export's layout is only safe to read when this is true.
+func (c columnMap) matchedByName(key string) bool { return c.byName[key] }
 
 // cell reads a column from a row, returning "" when the row is short rather
 // than panicking — short rows are common in hand-edited exports.
@@ -80,7 +100,10 @@ func resolveColumns(header []string, specs []columnSpec) columnMap {
 		normalised[i] = normaliseHeader(h)
 	}
 
-	cm := columnMap{index: make(map[string]int, len(specs))}
+	cm := columnMap{
+		index:  make(map[string]int, len(specs)),
+		byName: make(map[string]bool, len(specs)),
+	}
 	used := make(map[int]string, len(specs))
 
 	for _, spec := range specs {
@@ -102,12 +125,16 @@ func resolveColumns(header []string, specs []columnSpec) columnMap {
 
 		if found >= 0 {
 			cm.index[spec.key] = found
+			cm.byName[spec.key] = true
 			used[found] = spec.key
 			cm.notes = append(cm.notes, fmt.Sprintf("%s: column %d (%q)", spec.key, found+1, strings.TrimSpace(header[found])))
 			continue
 		}
 
 		cm.index[spec.key] = spec.fallback
+		if spec.fallback < 0 {
+			continue // optional column, absent from this export
+		}
 		name := "beyond end of row"
 		if spec.fallback < len(header) {
 			name = fmt.Sprintf("%q", strings.TrimSpace(header[spec.fallback]))
@@ -248,7 +275,27 @@ func buildLabels(moorings, boats [][]string, now time.Time) (buildResult, error)
 
 		boatID := mcols.cell(row, "boatid")
 		boat, owner := index.lookup(boatID)
-		if boat == "" && owner == "" {
+
+		// The mooring row carries its own copy of the boat and the member, so
+		// a gap in the boats file need not mean a half-blank label. Only trust
+		// those columns when they were matched by header name — at their
+		// historic positions they mean something else entirely.
+		filledFromMooring := false
+		if boat == "" && mcols.matchedByName("allocationboat") {
+			if boat = mcols.cell(row, "allocationboat"); boat != "" {
+				filledFromMooring = true
+			}
+		}
+		if owner == "" && mcols.matchedByName("allocationcontact") {
+			if owner = mcols.cell(row, "allocationcontact"); owner != "" {
+				filledFromMooring = true
+			}
+		}
+
+		switch {
+		case filledFromMooring:
+			warn("Line %d: boat %q is incomplete in the boats file — filled in from the mooring row. Worth fixing in SCM.", line, boatID)
+		case boat == "" && owner == "":
 			warn("Line %d: boat %q is not in the boats file — label printed without a name.", line, boatID)
 		}
 
