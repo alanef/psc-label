@@ -1022,6 +1022,7 @@
         <div class="row">
           <input  class="button-primary" type="button" value="Print" onclick="printTrigger('iFramePdf');" />
           <a class="button" href="{{ $.Downloadfile }}">Download PDF</a>
+          <a class="button" href="/">Start again</a>
 					<div class="row">
 						 <p>Make sure the printer is set up correctly, the labels are designed for 60mm wide x 40mm high print area, with 1.3 ( one point three)mm non print margin.
 						 You may need to go Printer > Preferences and create a new USER defined page size. Make sure you select the correct size when you print and select 'fit to page'.
@@ -1142,6 +1143,20 @@
                 <label for="To">To Number</label>
                 <input class="u-full-width" type="number"  min="1" max="9999" name="To">
               </div>
+            </div>
+            <div class="row">
+              <div class="six columns">
+                <label for="Prefix">Prefix (optional)</label>
+                <input class="u-full-width" type="text" maxlength="10" name="Prefix" id="Prefix" placeholder="e.g. CT-">
+              </div>
+              <div class="six columns">
+                <label for="Suffix">Suffix (optional)</label>
+                <input class="u-full-width" type="text" maxlength="10" name="Suffix" id="Suffix" placeholder="e.g. -XX">
+              </div>
+            </div>
+            <div class="row">
+              <p class="columnnotes">Type the separator you want: a prefix of <code>CT-</code> gives <code>CT-123</code>,
+              <code>CT</code> gives <code>CT123</code>. Long prefixes shrink the digits to keep them on the label.</p>
             </div>
              <div class="six columns">
                <label for="submit">&nbsp;</label>

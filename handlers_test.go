@@ -611,3 +611,113 @@ func firstError(body string) string {
 	}
 	return body[i:end]
 }
+
+// Issue #1: an optional prefix and suffix on number labels.
+
+func TestNumberLabelsWithPrefixAndSuffix(t *testing.T) {
+	ts := newTestServer(t)
+
+	status, body := post(t, ts, "/printnumber", url.Values{
+		"From": {"1"}, "To": {"3"}, "Prefix": {"CT-"}, "Suffix": {"-XX"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	// The summary shows the real first and last label, not bare numbers.
+	if !strings.Contains(body, "CT-1-XX") || !strings.Contains(body, "CT-3-XX") {
+		t.Errorf("summary does not show the prefixed range: %s", firstError(body))
+	}
+	if pdf := fetchGeneratedPDF(t, ts, body); len(pdf) == 0 {
+		t.Error("no PDF generated")
+	}
+}
+
+func TestNumberLabelAffixValidation(t *testing.T) {
+	ts := newTestServer(t)
+
+	cases := []struct {
+		name string
+		form url.Values
+		want string
+	}{
+		{
+			name: "prefix too long",
+			form: url.Values{"From": {"1"}, "To": {"2"}, "Prefix": {"ABCDEFGHIJK"}},
+			want: "at most 10 characters",
+		},
+		{
+			name: "disallowed character",
+			form: url.Values{"From": {"1"}, "To": {"2"}, "Prefix": {"CT£"}},
+			want: "not allowed",
+		},
+		{
+			name: "would not fit on the label",
+			form: url.Values{"From": {"9998"}, "To": {"9999"}, "Prefix": {"ABCDEFGHIJ"}, "Suffix": {"ABCDEFGHIJ"}},
+			want: "too wide",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := post(t, ts, "/printnumber", tc.form)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200 with the error on the page", status)
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("page does not mention %q: %s", tc.want, firstError(body))
+			}
+			if labelURLRe.MatchString(body) {
+				t.Error("a PDF was generated despite the invalid input")
+			}
+			assertStillServing(t, ts)
+		})
+	}
+}
+
+// Affixes are optional: the plain case must keep working untouched.
+func TestNumberLabelsStillWorkWithoutAffixes(t *testing.T) {
+	ts := newTestServer(t)
+	status, body := post(t, ts, "/printnumber", url.Values{"From": {"5"}, "To": {"7"}})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if !strings.Contains(body, "(5 to 7)") {
+		t.Errorf("summary wrong for a plain range: %s", firstError(body))
+	}
+}
+
+// Issue #2: there must be a way back to the form once a PDF is on screen.
+
+func TestGeneratedPageOffersAWayBack(t *testing.T) {
+	ts := newTestServer(t)
+	_, body := post(t, ts, "/printnumber", url.Values{"From": {"1"}, "To": {"2"}})
+
+	if !strings.Contains(body, `href="/"`) {
+		t.Error("the page showing a generated PDF has no link back to the form")
+	}
+	if !strings.Contains(body, "Start again") {
+		t.Error(`no "Start again" control alongside Print and Download`)
+	}
+}
+
+// An expired PDF link is otherwise a dead end: bare text with nothing to click.
+func TestExpiredPDFLinkOffersAWayBack(t *testing.T) {
+	ts := newTestServer(t)
+
+	resp, err := ts.Client().Get(ts.URL + "/label/deadbeef.pdf")
+	if err != nil {
+		t.Fatalf("GET expired label: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want HTML so the link is clickable", ct)
+	}
+	if !strings.Contains(string(body), `href="/"`) {
+		t.Error("the expired-PDF page has no link back to the form")
+	}
+	assertStillServing(t, ts)
+}

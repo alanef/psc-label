@@ -48,7 +48,7 @@ func TestEachLabelIsItsOwnPage(t *testing.T) {
 func TestNumberLabelsRender(t *testing.T) {
 	pdf := newLabelPDF()
 	for i := 1; i <= 3; i++ {
-		addNumberLabel(pdf, i)
+		addNumberLabel(pdf, "", i, "")
 	}
 	data, err := renderPDF(pdf)
 	if err != nil {
@@ -96,4 +96,83 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// A prefix or suffix must never push the text past the printable width. It
+// would be clipped in the PDF and not noticed until the sheet was printed.
+func TestNumberLabelsWithAffixesStayOnTheLabel(t *testing.T) {
+	cases := []struct{ prefix, suffix string }{
+		{"", ""},
+		{"CT-", ""},
+		{"", "-XX"},
+		{"CT-", "-XX"},
+		{"BERTH-", "/26"},
+	}
+	for _, tc := range cases {
+		name := tc.prefix + "N" + tc.suffix
+		t.Run(name, func(t *testing.T) {
+			pdf := newLabelPDF()
+			// 9999 is the widest number the form allows.
+			for _, n := range []int{1, 9999} {
+				addNumberLabel(pdf, tc.prefix, n, tc.suffix)
+				text := numberLabelText(tc.prefix, n, tc.suffix)
+				size := fitNumberFont(pdf, text)
+				pdf.SetFont("Arial", "B", size)
+				if w := pdf.GetStringWidth(text); w > printableWidth {
+					t.Errorf("%q at %.0fpt is %.1fmm wide, wider than the %.1fmm printable area",
+						text, size, w, printableWidth)
+				}
+				if size > numberFontMax || size < numberFontMin {
+					t.Errorf("font size %.0f outside the allowed %v-%v", size, numberFontMin, numberFontMax)
+				}
+				if !numberLabelFits(text) {
+					t.Errorf("%q reported as not fitting, but it should", text)
+				}
+			}
+			if _, err := renderPDF(pdf); err != nil {
+				t.Fatalf("renderPDF: %v", err)
+			}
+		})
+	}
+}
+
+// Some affixes cannot be made to fit at any readable size. Those must be
+// reported as not fitting, so the handler can refuse them rather than print a
+// clipped label — which would only be discovered on the printed sheet.
+func TestOverlongAffixesAreReportedAsNotFitting(t *testing.T) {
+	for _, text := range []string{
+		numberLabelText("ABCDEFGHIJ", 9999, "ABCDEFGHIJ"),
+		numberLabelText("VERYLONGPR", 1, "EFIXHERE00"),
+	} {
+		if numberLabelFits(text) {
+			t.Errorf("%q reported as fitting a 55mm label, which it cannot", text)
+		}
+	}
+}
+
+// A bare number must still print at full size — the affix support must not
+// shrink the ordinary case.
+func TestPlainNumbersKeepTheFullSizeFont(t *testing.T) {
+	pdf := newLabelPDF()
+	addNumberLabel(pdf, "", 9999, "")
+	if got := fitNumberFont(pdf, "9999"); got != numberFontMax {
+		t.Errorf("font for 9999 = %.0f, want the full %.0f", got, numberFontMax)
+	}
+}
+
+func TestNumberLabelText(t *testing.T) {
+	for _, tc := range []struct {
+		prefix, suffix string
+		number         int
+		want           string
+	}{
+		{"", "", 123, "123"},
+		{"CT-", "", 123, "CT-123"},
+		{"", "-XX", 123, "123-XX"},
+		{"CT", "", 123, "CT123"},
+	} {
+		if got := numberLabelText(tc.prefix, tc.number, tc.suffix); got != tc.want {
+			t.Errorf("numberLabelText(%q,%d,%q) = %q, want %q", tc.prefix, tc.number, tc.suffix, got, tc.want)
+		}
+	}
 }

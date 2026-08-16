@@ -225,7 +225,14 @@ func (s *server) handleLabelPDF(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/label/"), ".pdf")
 	pdf, ok := s.pdfs.get(id)
 	if !ok {
-		http.Error(w, "That PDF has expired — generate it again.", http.StatusNotFound)
+		// HTML with a way back, not bare text: this is a dead end otherwise,
+		// and the browser's Back button is not obvious to everyone.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><title>PSC labels</title>`+
+			`<p style="font-family:sans-serif">That PDF is no longer available — they are kept only briefly. `+
+			`<a href="/">Go back and generate it again</a>.</p>`)
 		return
 	}
 
@@ -307,6 +314,22 @@ func (s *server) handleNumber(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, fmt.Sprintf("That is %d labels — the most in one go is %d.", to-from+1, maxNumberLabels))
 		}
 	}
+	prefix, err := cleanAffix(r.FormValue("Prefix"), "prefix")
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	suffix, err := cleanAffix(r.FormValue("Suffix"), "suffix")
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+
+	// The highest number is the widest label, so if that fits they all do.
+	if len(errs) == 0 {
+		if widest := numberLabelText(prefix, to, suffix); !numberLabelFits(widest) {
+			errs = append(errs, fmt.Sprintf("%q is too wide for a 60mm label at a size anyone could read — shorten the prefix or suffix.", widest))
+		}
+	}
+
 	if len(errs) > 0 {
 		s.render(w, Page{Numbererr: errs})
 		return
@@ -314,11 +337,12 @@ func (s *server) handleNumber(w http.ResponseWriter, r *http.Request) {
 
 	pdf := newLabelPDF()
 	for i := from; i <= to; i++ {
-		addNumberLabel(pdf, i)
+		addNumberLabel(pdf, prefix, i, suffix)
 	}
 
-	s.finish(w, pdf, Page{}, func(p *Page, msg string) { p.Numbererr = []string{msg} },
-		fmt.Sprintf("%d number labels generated (%d to %d).", to-from+1, from, to))
+	summary := fmt.Sprintf("%d number labels generated (%s to %s).", to-from+1,
+		numberLabelText(prefix, from, suffix), numberLabelText(prefix, to, suffix))
+	s.finish(w, pdf, Page{}, func(p *Page, msg string) { p.Numbererr = []string{msg} }, summary)
 }
 
 func (s *server) handleBulk(w http.ResponseWriter, r *http.Request) {
@@ -478,6 +502,34 @@ func (s *server) finish(w http.ResponseWriter, pdf *fpdfDoc, page Page, setErr f
 	page.Downloadfile = page.Labelfile + "?download=1"
 	page.Summary = summary
 	s.render(w, page)
+}
+
+// maxAffixRunes bounds a number label's prefix or suffix. Longer than this and
+// the digits shrink to the point where the label stops being readable from any
+// useful distance, which defeats the purpose of a berth marker.
+const maxAffixRunes = 10
+
+// cleanAffix validates an optional prefix or suffix for number labels. The
+// character set is deliberately narrow: the PDF font is a standard Latin one,
+// so anything outside it would render as the wrong glyph on the printed sheet
+// rather than failing visibly here.
+func cleanAffix(raw, field string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if len([]rune(s)) > maxAffixRunes {
+		return "", fmt.Errorf("The %s can be at most %d characters.", field, maxAffixRunes)
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '/', r == '.', r == ' ', r == '#':
+		default:
+			return "", fmt.Errorf("The %s can only use letters, numbers, spaces and - _ / . # — %q is not allowed.", field, string(r))
+		}
+	}
+	return s, nil
 }
 
 // errNoFile means the form field was left empty, which is only an error for
