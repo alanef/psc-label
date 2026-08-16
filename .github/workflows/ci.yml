@@ -48,6 +48,21 @@ jobs:
       - name: Build image
         run: docker build -t psc-label:ci .
 
+      # Without this the SCM fetch fails in the container with "certificate
+      # signed by unknown authority", while everything else works — so nothing
+      # else in this job would catch it going missing.
+      - name: Check the CA bundle is in the image
+        run: |
+          cid=$(docker create psc-label:ci)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          if ! docker cp "$cid:/etc/ssl/certs/ca-certificates.crt" - > /tmp/ca.tar; then
+            echo "no CA bundle in the image: fetching from SCM would fail"
+            exit 1
+          fi
+          bytes=$(wc -c < /tmp/ca.tar)
+          echo "CA bundle present (${bytes} bytes)"
+          test "$bytes" -gt 10000
+
       - name: Check it serves
         run: |
           docker run -d --name psc-label-ci -p 8080:8080 psc-label:ci
