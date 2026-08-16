@@ -939,6 +939,21 @@
   content: "\25BC\00a0";
 }
 
+/* Shown while a form is being processed. Fetching from SCM takes about ten
+   seconds, and with no feedback at all people assume nothing happened and
+   press the button again. */
+.working {
+  background-color: #eaf2fb;
+  border: 1px solid #9dbfe4;
+  padding: 10px;
+  color: #1c3f66;
+}
+
+.working::before {
+  content: "\21BB\00a0";
+  font-weight: bold;
+}
+
 
 
   <!-- Favicon
@@ -1063,7 +1078,8 @@
         {{ else }}
         <p>This copy has an SCM login configured, so no password is needed here.</p>
         {{ end }}
-        <form action="/printfetch" method="post">
+        <form action="/printfetch" method="post" data-busy="Fetching from SCM…"
+              data-working="Signing in to SCM and downloading the moorings. This usually takes about ten seconds — please wait, and do not press it again.">
           <div class="row">
             {{ if .AskLogin }}
             <div class="four columns">
@@ -1097,7 +1113,8 @@
           <p>The fallback for when SCM changes and the button above stops working. Download the Mooring Allocations CSV
           from SCM, upload it here and process — that one file is all you need. You can remove unwanted rows or sort it
           in a spreadsheet first, but do not delete the header row.</p>
-          <form action="/printbulk" method="post" enctype="multipart/form-data">
+          <form action="/printbulk" method="post" enctype="multipart/form-data" data-busy="Processing…"
+                data-working="Building the labels. A full club export takes a few seconds — please wait, and do not press it again.">
             <div class="row">
               <div class="four columns">
 							  <div class="row">
@@ -1132,7 +1149,8 @@
         <h2>Number Labels</h2>
       </div>
       <div class="row">
-		  <form action="/printnumber" method="post">
+		  <form action="/printnumber" method="post" data-busy="Creating…"
+		  data-working="Building the labels — please wait.">
 	
         <div class="row">
               <div class="six columns">
@@ -1175,5 +1193,61 @@
        </div>
  </div>
 </div>
+<script>
+// Feedback while a form is working. Fetching from SCM takes about ten seconds
+// and generating a full club run takes a few; with no sign that anything is
+// happening, people assume the click missed and press again.
+//
+// Plain DOM, no library, and entirely optional: with scripting off the forms
+// submit exactly as before, just without the message.
+(function () {
+  "use strict";
+  var forms = document.querySelectorAll("form[data-busy]");
+
+  Array.prototype.forEach.call(forms, function (form) {
+    form.addEventListener("submit", function (event) {
+      // A second click while the first is still in flight would start another
+      // SCM session and print the labels twice.
+      if (form.getAttribute("data-submitted") === "1") {
+        event.preventDefault();
+        return;
+      }
+      form.setAttribute("data-submitted", "1");
+
+      var note = document.createElement("p");
+      note.className = "working";
+      note.setAttribute("role", "status");
+      note.textContent = form.getAttribute("data-working") || "Working…";
+      form.parentNode.insertBefore(note, form.nextSibling);
+
+      var button = form.querySelector('input[type="submit"]');
+      if (button) {
+        button.setAttribute("data-idle-value", button.value);
+        button.value = form.getAttribute("data-busy");
+        // Deferred: disabling a submit button inside its own submit handler
+        // can cancel the submission in some browsers.
+        window.setTimeout(function () { button.disabled = true; }, 0);
+      }
+    });
+  });
+
+  // Coming back with the Back button can restore the page from cache with the
+  // button still disabled and the message still showing. Reset it.
+  window.addEventListener("pageshow", function () {
+    Array.prototype.forEach.call(forms, function (form) {
+      form.removeAttribute("data-submitted");
+      var button = form.querySelector('input[type="submit"]');
+      if (button) {
+        button.disabled = false;
+        var idle = button.getAttribute("data-idle-value");
+        if (idle) { button.value = idle; }
+      }
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".working"), function (n) {
+      n.parentNode.removeChild(n);
+    });
+  });
+})();
+</script>
 </body>
 </html>

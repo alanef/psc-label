@@ -721,3 +721,41 @@ func TestExpiredPDFLinkOffersAWayBack(t *testing.T) {
 	}
 	assertStillServing(t, ts)
 }
+
+// Issue #3: the SCM fetch takes about ten seconds. With no feedback people
+// assume the click missed and press again, which would start a second SCM
+// session and print everything twice.
+
+func TestSlowFormsAnnounceThatTheyAreWorking(t *testing.T) {
+	ts := newFetchTestServer(t, "https://scm.example", false)
+
+	resp, err := ts.Client().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	page := string(body)
+
+	// Every form that can take a noticeable time must carry the markup the
+	// script keys off, or it will silently do nothing.
+	if got := strings.Count(page, "data-busy="); got != 3 {
+		t.Errorf("found %d forms marked as slow, want 3 (fetch, bulk upload, numbers)", got)
+	}
+	for _, want := range []string{
+		`action="/printfetch"`,
+		"Fetching from SCM",
+		"do not press it again",
+		`form[data-busy]`,
+		`data-submitted`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page is missing %q", want)
+		}
+	}
+
+	// The fetch form specifically must say roughly how long it takes.
+	if !strings.Contains(page, "about ten seconds") {
+		t.Error("the fetch form does not say how long it takes")
+	}
+}
