@@ -72,11 +72,16 @@ double-clicked Windows binary normally needs none of them.
 | `SCM_PASSWORD` | *(unset)* | As above. Only takes effect when the email is set too — half a credential is ignored rather than sent. |
 | `SCM_FETCH` | *(unset)* | Set to `off` to hide the fetch panel entirely and leave only the CSV upload. |
 
-**Think before setting `SCM_EMAIL` and `SCM_PASSWORD` on the hosted copy.**
-Anyone who can reach the page can then pull the mooring list without knowing an
-SCM password, and anyone who can read the environment has the credential itself.
-If SCM has no read-only or mooring-scoped account, prefer leaving them unset and
-letting whoever is printing type their own login.
+**Use a read-only account scoped to moorings.** SCM can restrict a user to
+reading mooring allocations and nothing else, and that is what the hosted copy
+should sign in as. Setting `SCM_EMAIL` and `SCM_PASSWORD` means anyone who
+reaches the page can pull the mooring list without knowing an SCM password, and
+anyone who can read the environment has the credential itself — a scoped account
+makes both worth much less. Never put a full administrator login here.
+
+Leaving them unset is still the right answer for a laptop, and for a hosted copy
+where no scoped account is available: the page then asks whoever is printing for
+their own login and forgets it again.
 
 The flow is four requests — `GET /login`, `POST /users/login`,
 `GET /moorings/export_setup`, `POST /moorings/export_actual` — with the Rails
