@@ -222,6 +222,81 @@ func TestOwnerFallsBackToContactColumn(t *testing.T) {
 	}
 }
 
+// realBoatsHeader is the header row of the SCM boats export of 16 Aug 2026,
+// verbatim. Header names only — the file itself holds members' details and must
+// never be committed.
+var realBoatsHeader = []string{
+	"Boat ID", "Name", "Manufacturer", "Keel", "Construction", "Colour",
+	"Nat Registration", "Insurance", "Disc Number", "LOA", "Beam", "Draught",
+	"Vessel Type", "Usage", "Status", "Notes", "LOA Units", "Beam Units",
+	"Draught Units", "LOA Feet", "LOA Inches", "Beam Feet", "Beam Inches",
+	"Draught Feet", "Draught Inches", "Weight", "Mast Height", "Rig Type",
+	"Design", "Mast Units", "Mast Feet", "Mast Inches", "Sail Number",
+	"Owner Name", "Primary Name", "Primary Number", "Secondary Numbers",
+	"IRC TCC", "IRC Crew Number", "IRC Cert Number", "Class", "Import ID",
+	"Contact IDs", "Portsmouth Number", "Contact Name", "Contact Number",
+	"Contact Email", "Location", "Tags", "Berth/Space Name",
+	"Berth/Space Group", "Start", "End",
+}
+
+// Pin the real export layout so a change to the alias lists cannot silently
+// re-point a column.
+func TestResolveColumnsAgainstRealBoatsExport(t *testing.T) {
+	cols := resolveColumns(realBoatsHeader, boatColumns)
+
+	want := map[string]int{
+		"id":          0,  // Boat ID
+		"boat":        1,  // Name
+		"contactname": 44, // Contact Name
+		"ownername":   33, // Owner Name
+	}
+	for key, pos := range want {
+		if got := cols.index[key]; got != pos {
+			t.Errorf("%s resolved to column %d (%q), want %d (%q)",
+				key, got, realBoatsHeader[got], pos, realBoatsHeader[pos])
+		}
+	}
+	for _, note := range cols.notes {
+		if strings.Contains(note, "no matching header") {
+			t.Errorf("every column should match by name in the real export: %s", note)
+		}
+	}
+}
+
+// The club's labels have always carried the Contact Name where there is one.
+// Contact Name is populated on 78% of boats against 46% for Owner Name, and
+// the two differ on 133 of them, so the order is not cosmetic.
+func TestContactNameIsPreferredOverOwnerName(t *testing.T) {
+	boats := [][]string{realBoatsHeader, make([]string, len(realBoatsHeader))}
+	boats[1][0] = "B1"
+	boats[1][1] = "Solo:1246"
+	boats[1][33] = "Owner Person"
+	boats[1][44] = "Contact Person"
+
+	moorings := [][]string{
+		historicHeader(18),
+		historicMooringRow("147", "C", "B1", "01/Jan/2026", "31/Dec/2026"),
+	}
+
+	res, err := buildLabels(moorings, boats, testNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Labels[0].Name != "Contact Person" {
+		t.Errorf("name = %q, want the Contact Name column", res.Labels[0].Name)
+	}
+
+	// With no contact name, fall back to the owner.
+	boats[1][44] = ""
+	res, err = buildLabels(moorings, boats, testNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Labels[0].Name != "Owner Person" {
+		t.Errorf("name = %q, want the Owner Name fallback", res.Labels[0].Name)
+	}
+}
+
 func TestResolveColumnsByHeaderName(t *testing.T) {
 	// Columns in a completely different order from the historic layout.
 	header := []string{"Boat ID", "Start Date", "End Date", "Berth No.", "Area"}

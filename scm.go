@@ -30,12 +30,18 @@ var mooringColumns = []columnSpec{
 	{"end", []string{"enddate", "end", "to", "todate", "licenceend", "licenseend", "validto", "expiry", "expirydate", "expires"}, 17},
 }
 
-// Boats export.
+// Boats export. Verified against the SCM export of 16 Aug 2026, which has 53
+// columns headed "Boat ID", "Name", ... "Owner Name", ... "Contact Name".
 var boatColumns = []columnSpec{
-	{"id", []string{"id", "boatid", "boatnumber"}, 0},
-	{"boat", []string{"boat", "boatname", "classandsailnumber", "classsailno", "description", "name"}, 1},
-	{"owner", []string{"owner", "ownername", "membername", "member", "ownerfullname"}, 44},
-	{"owneralt", []string{"helm", "contact", "primarycontact", "contactname"}, 33},
+	{"id", []string{"boatid", "id", "boatnumber"}, 0},
+	{"boat", []string{"name", "boat", "boatname", "classandsailnumber", "classsailno", "description"}, 1},
+	// "Contact Name" is the member who actually holds the boat and is filled
+	// in far more often than "Owner Name" (78% vs 46% of 1163 boats in the
+	// 2026 export), and the two disagree on 133 of them. The original program
+	// preferred it by position for the same reason, so keep that order: the
+	// club is used to the names these labels carry.
+	{"contactname", []string{"contactname", "contact", "primarycontact", "helm"}, 44},
+	{"ownername", []string{"ownername", "owner", "membername", "member", "ownerfullname"}, 33},
 }
 
 // normaliseHeader reduces a header cell to letters and digits only, so
@@ -283,9 +289,9 @@ func indexBoats(boats [][]string, cols columnMap) boatIndex {
 		if id == "" {
 			continue
 		}
-		owner := cols.cell(row, "owner")
+		owner := cols.cell(row, "contactname")
 		if owner == "" {
-			owner = cols.cell(row, "owneralt")
+			owner = cols.cell(row, "ownername")
 		}
 		if _, exists := index[id]; exists {
 			continue // first entry wins, matching the original's behaviour
