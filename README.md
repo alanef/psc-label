@@ -197,3 +197,13 @@ git tag v1.0.0 && git push origin v1.0.0
 
 The workflow attaches `psc-label.exe` (Windows), Linux and macOS builds and a
 `SHA256SUMS.txt` to a GitHub release.
+
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: never commit a real
+SCM export or a generated bulk PDF, and do not undo the defensiveness — each
+piece of it is there because of a specific failure in club use.
+
+## Licence
+
+[MIT](LICENSE). Copyright (c) 2017-2026 Alan Fuller.
