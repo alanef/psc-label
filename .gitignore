@@ -1,0 +1,10 @@
+# Generated labels — these contain member names, boats and berths. Never commit.
+*.pdf
+
+# Build output
+psc-label
+psc-label.exe
+/dist/
+
+# Local data — SCM exports contain member personal data
+*.csv

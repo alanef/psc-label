@@ -1,0 +1,15 @@
+{
+	"ImportPath": "gitlab.com/alan8/psc-label",
+	"GoVersion": "go1.7",
+	"GodepVersion": "v79",
+	"Deps": [
+		{
+			"ImportPath": "github.com/jung-kurt/gofpdf",
+			"Rev": "6ac7d2caee89cdfdb4f6c273a88d1173d234c21b"
+		},
+		{
+			"ImportPath": "github.com/skratchdot/open-golang/open",
+			"Rev": "75fb7ed4208cf72d323d7d02fd1a5964a7a9073c"
+		}
+	]
+}
