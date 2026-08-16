@@ -1,0 +1,69 @@
+name: Release
+
+# Tag a release and the Windows executable the club uses is built here, so it
+# never depends on anyone's laptop:
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist)"
+        required: true
+
+permissions:
+  contents: write # needed to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test before releasing
+        run: go test -count=1 ./...
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          build() {
+            GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION" -o "dist/$3" .
+          }
+          build windows amd64 psc-label.exe
+          build linux   amd64 psc-label-linux-amd64
+          build darwin  arm64 psc-label-macos-arm64
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -la dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "$VERSION" dist/* \
+            --title "psc-label $VERSION" \
+            --notes "$(cat <<'NOTES'
+          ## Windows — how the club runs it
+
+          1. Download **psc-label.exe** below and put it anywhere, e.g. the Desktop.
+          2. Double-click it. A black console window opens and your browser opens the form.
+          3. Windows may say *"Windows protected your PC"* — click **More info**, then **Run anyway**. That warning is because the file is not code-signed, not because anything is wrong with it.
+          4. Leave the console window open while you print. Close it when you are done.
+
+          Nothing is installed and nothing is written to disk — the PDF is generated in memory and shown in the browser.
+
+          Verify your download against `SHA256SUMS.txt` if you want to.
+          NOTES
+          )"

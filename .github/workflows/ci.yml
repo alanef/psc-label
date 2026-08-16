@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      # The club runs this on Windows, so prove it still cross-compiles.
+      - name: Cross-compile for Windows
+        run: GOOS=windows GOARCH=amd64 go build -o /dev/null .
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Coolify builds from this Dockerfile, so a broken one breaks deploys.
+      - name: Build image
+        run: docker build -t psc-label:ci .
+
+      - name: Check it serves
+        run: |
+          docker run -d --name psc-label-ci -p 8080:8080 psc-label:ci
+          for i in $(seq 1 20); do
+            if curl -fs http://localhost:8080/healthz >/dev/null; then
+              echo "healthy"
+              curl -fs http://localhost:8080/ | grep -q "PSC Berth Label Printing" && echo "page renders"
+              docker rm -f psc-label-ci
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "container never became healthy"
+          docker logs psc-label-ci
+          exit 1

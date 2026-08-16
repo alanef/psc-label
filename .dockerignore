@@ -1,0 +1,9 @@
+.git
+.github
+*.pdf
+*.csv
+psc-label
+psc-label.exe
+dist/
+README.md
+CLAUDE.md
