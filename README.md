@@ -10,15 +10,19 @@ used either way.
 
 ## What it does
 
-Three label types. Each PDF is generated in memory and shown in the page with a
-Print button; nothing is written to disk.
+Four forms on one page. Each PDF is generated in memory and shown in the page
+with a Print button; nothing is written to disk.
 
 | Form | Endpoint | Contents |
 |------|----------|----------|
 | Fetch from SCM | `POST /printfetch` | Signs in to SCM, downloads the current mooring allocations and prints the lot, in one click |
 | Individual Label | `POST /printsingle` | One member's name, boat and berth — printed twice, for the boat and the trailer |
-| Upload the CSV | `POST /printbulk` | Every current mooring allocation from an uploaded export, sorted by surname, each printed twice |
+| Upload the CSV instead | `POST /printbulk` | The same, from an export you upload — the fallback, folded away behind an accordion |
 | Number Labels | `POST /printnumber` | A range of large numbers, one per label (max 2000 at a time) |
+
+Both mooring routes produce the same thing: every allocation whose licence
+covers today, sorted by surname, each label printed twice — one for the boat and
+one for the trailer.
 
 Each label is its own page at 63mm x 43mm — the 60x40 print area plus the
 non-printing margin — with a black `PSC Licence <year>` banner and the name
@@ -93,10 +97,6 @@ if posted — it is the better source of boat names and members — but nothing 
 the page offers one any more, and without it the names come from the mooring
 rows themselves.
 
-Rows whose licence period does not cover today are skipped. A row with no end
-date is treated as an open-ended licence, and a licence ending today still
-prints.
-
 You may delete unwanted rows from the mooring CSV, or re-sort it in a
 spreadsheet, before uploading — but keep the header row. Columns can move: they
 are matched by header name, falling back to their historic position when a
@@ -105,9 +105,26 @@ used for each field, so a bad guess is visible rather than silent. If it guesses
 wrong, add the real header name to the alias lists at the top of
 [`scm.go`](scm.go).
 
-Rows that cannot be used — an unreadable date, a boat with no name anywhere —
-are skipped and reported at the top of the page. This applies to both routes:
-one bad row never stops the rest of the run.
+## What gets skipped, and what only warns
+
+The same rules apply whichever route the data came in by, and neither one ever
+stops the run part-way.
+
+Rows whose licence period does not cover today are **left out** silently; the
+count appears in the summary. A row with no end date is treated as an open-ended
+licence, and a licence ending today still prints.
+
+A row with an unreadable start or end date is **skipped and warned about**,
+naming the line number — that single bad date is what used to kill the whole
+program.
+
+Everything else only **warns and still prints**: a boat with no name anywhere
+gets a label without one, as does a row with no berth. A blank label is obvious
+on the bench and can be written on; a missing label is not noticed until someone
+has no licence on their boat.
+
+Warnings are shown at the top of the page and capped at 25, so one systematic
+problem cannot bury the result.
 
 ## Printing
 
@@ -133,7 +150,9 @@ Dockerfile. It listens on `$PORT` (8080 in the image) and answers `/healthz`.
 
 **Put an authenticating proxy in front of it.** The app itself has no login, and
 the CSVs contain members' names, boats and berth numbers. Cloudflare Zero Trust
-with an email allowlist is the intended arrangement.
+with an email allowlist is the intended arrangement. This matters more once
+`SCM_EMAIL` and `SCM_PASSWORD` are set: the page then becomes a way to pull the
+mooring list out of SCM without knowing an SCM password.
 
 Uploaded and fetched CSVs and generated PDFs are held in memory only: the CSV is
 discarded once the labels are built, and the last few PDFs are kept under
@@ -143,11 +162,17 @@ disk, and SCM credentials are never stored or logged.
 ## Development
 
 ```
-go test ./...        # unit and HTTP handler tests
-go vet ./...
+go test ./...        # 65 tests: CSV parsing, PDF geometry, HTTP handlers, SCM fetch
+go test -race ./...
+go vet ./... && gofmt -l .
 go run .             # starts on :9080 and opens a browser
 PORT=8080 go run .   # starts on :8080, no browser
 ```
+
+The tests need no network and no fixtures: the SCM fetch runs against a fake
+server built in the test, and there is deliberately no copy of a real export in
+this repository — the files contain members' names, boats and berth numbers.
+`.gitignore` blocks `*.csv` and `*.pdf` for the same reason.
 
 Go 1.22 or newer. Dependencies are ordinary modules —
 [`go-pdf/fpdf`](https://github.com/go-pdf/fpdf) for PDF generation and
@@ -155,8 +180,8 @@ Go 1.22 or newer. Dependencies are ordinary modules —
 
 | File | Contents |
 |------|----------|
-| `psc-label.go` | HTTP server, handlers, in-memory PDF store |
-| `scm.go` | SCM CSV parsing: column matching, dates, merging the two exports |
+| `psc-label.go` | HTTP server, handlers, config, in-memory PDF store |
+| `scm.go` | SCM CSV parsing: column matching, dates, building the labels |
 | `scmfetch.go` | Signing in to SCM and downloading the mooring export |
 | `pdf.go` | Label geometry and PDF rendering |
 | `templates/index.html` | The whole UI, embedded into the binary at build time |
