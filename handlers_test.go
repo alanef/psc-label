@@ -300,16 +300,31 @@ func TestBulkBadDateReportsAndSurvives(t *testing.T) {
 	assertStillServing(t, ts)
 }
 
-func TestBulkMissingFiles(t *testing.T) {
+func TestBulkMissingMooringFile(t *testing.T) {
 	ts := newTestServer(t)
-	for _, omit := range []string{"BerthFile", "BoatFile"} {
-		t.Run("omit "+omit, func(t *testing.T) {
-			_, body := postCSVs(t, ts, currentMoorings(), currentBoats(), omit)
-			if !strings.Contains(body, "no file was chosen") {
-				t.Errorf("expected a missing-file message for %s", omit)
-			}
-			assertStillServing(t, ts)
-		})
+	_, body := postCSVs(t, ts, currentMoorings(), currentBoats(), "BerthFile")
+	if !strings.Contains(body, "no file was chosen") {
+		t.Error("expected a missing-file message for the mooring file")
+	}
+	assertStillServing(t, ts)
+}
+
+// The one-download path: mooring file only, no boats file at all.
+func TestBulkWithoutBoatsFile(t *testing.T) {
+	ts := newTestServer(t)
+	moorings := [][]string{
+		realMooringHeader,
+		realMooringRow("530", "C", "Solo:1246", "Zoe Adams", "407587", "01/Jan/2020", "31/Dec/2099"),
+	}
+	status, body := postCSVs(t, ts, moorings, nil, "BoatFile")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if data := fetchGeneratedPDF(t, ts, body); countPages(t, data) != 2 {
+		t.Error("the mooring file alone should produce its 2 labels")
+	}
+	if !strings.Contains(body, "No boats file supplied") {
+		t.Error("page should say it worked from the mooring file alone")
 	}
 }
 

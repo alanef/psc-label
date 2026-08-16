@@ -999,9 +999,9 @@
         <h2>Bulk Labels</h2>
       </div>
       <div class="row">
-			     <p>Bulk labels, first download the Mooring allocation and Boat files from SCM, upload them and process. The labels are driven from the Mooring Allocations CSV
-				 so if you want you can remove uneeded rows from the Mooring CSV before printing, or even sort the file in spreadsheet and re save as as CSV. But do not delete the header it must be the first row, and do not delete any columns.
-				   </p>
+			     <p>Bulk labels are driven from the Mooring Allocations CSV. Download it from SCM with the button below, upload it, and process — that one file is all you need.</p>
+				 <p>The Boats CSV is optional. It is the better source for boat names and members, so upload it as well if you have it; without it the names come from the mooring rows themselves.
+				 You can remove unwanted rows from the Mooring CSV before printing, or sort it in a spreadsheet and re-save as CSV, but do not delete the header row.</p>
           <form action="/printbulk" method="post" enctype="multipart/form-data">
             <div class="row">
               <div class="four columns">
@@ -1018,7 +1018,7 @@
 									<a href="https://papercourtsc.clubmin.net/boats/export" target="_blank" class="button">Download SCM Boats</a>
 								</div>
 								<div class="row">
-	                <label for="Boat">Boat CSV</label>
+	                <label for="Boat">Boat CSV (optional)</label>
 	                <input class="u-full-width" type="file"  name="BoatFile">
 	              </div>
 							</div>

@@ -310,6 +310,73 @@ func TestGapsInBoatsFileAreFilledFromMooringRow(t *testing.T) {
 	}
 }
 
+// realMooringRow builds a row in the 2026 layout.
+func realMooringRow(name, group, boat, contact, boatID, from, until string) []string {
+	row := make([]string, len(realMooringHeader))
+	row[1], row[3] = name, group
+	row[13], row[15] = boat, contact
+	row[17], row[18], row[19] = boatID, from, until
+	return row
+}
+
+// The mooring file alone is enough: this is the one-download path.
+func TestBuildLabelsFromMooringFileAlone(t *testing.T) {
+	moorings := [][]string{
+		realMooringHeader,
+		realMooringRow("530", "C", "Solo:1246", "Zoe Adams", "407587", "01/Jan/2026", "31/Dec/2026"),
+		realMooringRow("12", "A", "Laser:9", "Al Baker", "446917", "01/Jan/2026", "31/Dec/2026"),
+	}
+
+	res, err := buildLabels(moorings, nil, testNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Labels) != 2 {
+		t.Fatalf("got %d labels, want 2", len(res.Labels))
+	}
+	if res.Labels[0].Name != "Zoe Adams" || res.Labels[0].Boat != "Solo:1246" || res.Labels[0].Berth != "C530" {
+		t.Errorf("label = %+v, want the mooring row's own boat and contact", res.Labels[0])
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("a complete mooring row should warn about nothing, got %v", res.Warnings)
+	}
+}
+
+// The boats file remains authoritative when it is supplied.
+func TestBoatsFileWinsOverMooringRowWhenBothPresent(t *testing.T) {
+	moorings := [][]string{
+		realMooringHeader,
+		realMooringRow("530", "C", "Stale Boat", "Stale Name", "407587", "01/Jan/2026", "31/Dec/2026"),
+	}
+	boats := [][]string{realBoatsHeader, make([]string, len(realBoatsHeader))}
+	boats[1][0], boats[1][1], boats[1][44] = "407587", "Solo:1246", "Zoe Adams"
+
+	res, err := buildLabels(moorings, boats, testNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Labels[0].Name != "Zoe Adams" || res.Labels[0].Boat != "Solo:1246" {
+		t.Errorf("label = %+v, want the boats file values", res.Labels[0])
+	}
+}
+
+// Without a boats file, an old-layout mooring export cannot be used on its own:
+// its boat and contact columns cannot be identified, so say so plainly.
+func TestMooringFileAloneRefusedWhenColumnsUnidentified(t *testing.T) {
+	moorings := [][]string{
+		historicHeader(18),
+		historicMooringRow("147", "C", "B1", "01/Jan/2026", "31/Dec/2026"),
+	}
+
+	_, err := buildLabels(moorings, nil, testNow)
+	if err == nil {
+		t.Fatal("expected an error asking for the boats file")
+	}
+	if !strings.Contains(err.Error(), "boats file is needed") {
+		t.Errorf("error should tell the user to upload the boats file, got %q", err)
+	}
+}
+
 // Those same columns must NOT be read from a file whose layout was guessed by
 // position — at 13 and 15 in the old layout they mean something else.
 func TestMooringFallbackColumnsIgnoredWhenLayoutIsGuessed(t *testing.T) {

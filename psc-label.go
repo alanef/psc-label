@@ -316,8 +316,9 @@ func (s *server) handleBulk(w http.ResponseWriter, r *http.Request) {
 		s.render(w, Page{Bulkerr: []string{"Mooring allocations file: " + err.Error()}})
 		return
 	}
+	// The boats file is optional — the mooring file carries enough on its own.
 	boats, err := readCSV(r, "BoatFile")
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoFile) {
 		s.render(w, Page{Bulkerr: []string{"Boats file: " + err.Error()}})
 		return
 	}
@@ -368,6 +369,10 @@ func (s *server) finish(w http.ResponseWriter, pdf *fpdfDoc, page Page, setErr f
 	s.render(w, page)
 }
 
+// errNoFile means the form field was left empty, which is only an error for
+// the mooring file.
+var errNoFile = errors.New("no file was chosen")
+
 // readCSV pulls one uploaded file out of the request and parses it leniently:
 // ragged rows and stray quotes are tolerated, because these files are often
 // opened and re-saved in Excel before being uploaded.
@@ -375,7 +380,7 @@ func readCSV(r *http.Request, field string) ([][]string, error) {
 	file, header, err := r.FormFile(field)
 	if err != nil {
 		if errors.Is(err, http.ErrMissingFile) {
-			return nil, errors.New("no file was chosen")
+			return nil, errNoFile
 		}
 		return nil, err
 	}

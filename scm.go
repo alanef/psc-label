@@ -210,7 +210,13 @@ type buildResult struct {
 	Skipped  int      // rows outside their licence period or unusable
 }
 
-// buildLabels merges the two SCM exports into a sorted list of labels.
+// buildLabels turns the SCM exports into a sorted list of labels.
+//
+// The boats export is optional: the mooring allocations file carries its own
+// "Allocation Boat" and "Allocation Contact", which cover 405 of the club's 406
+// current allocations on their own. Supplying the boats file fills the
+// remainder and is the more authoritative source, so it is used first when
+// present.
 //
 // Every row-level problem is collected as a warning and the row skipped. This
 // function must never be able to take the process down: a single bad date in a
@@ -221,16 +227,27 @@ func buildLabels(moorings, boats [][]string, now time.Time) (buildResult, error)
 	if len(moorings) < 2 {
 		return res, fmt.Errorf("mooring allocations file has no data rows (expected a header row then one row per mooring)")
 	}
-	if len(boats) < 2 {
-		return res, fmt.Errorf("boats file has no data rows (expected a header row then one row per boat)")
-	}
 
 	mcols := resolveColumns(moorings[0], mooringColumns)
-	bcols := resolveColumns(boats[0], boatColumns)
 	res.Notes = append(res.Notes, "Mooring file — "+strings.Join(mcols.notes, "; "))
-	res.Notes = append(res.Notes, "Boats file — "+strings.Join(bcols.notes, "; "))
 
-	index := indexBoats(boats, bcols)
+	var index boatIndex
+	switch {
+	case len(boats) >= 2:
+		bcols := resolveColumns(boats[0], boatColumns)
+		res.Notes = append(res.Notes, "Boats file — "+strings.Join(bcols.notes, "; "))
+		index = indexBoats(boats, bcols)
+	case len(boats) > 0:
+		return res, fmt.Errorf("boats file has no data rows (expected a header row then one row per boat)")
+	default:
+		// Working from the mooring file alone. That is only possible if its
+		// own boat and contact columns were identified by name.
+		if !mcols.matchedByName("allocationboat") || !mcols.matchedByName("allocationcontact") {
+			return res, fmt.Errorf("this mooring file has no recognisable %q and %q columns, so the boats file is needed as well — upload it too",
+				"Allocation Boat", "Allocation Contact")
+		}
+		res.Notes = append(res.Notes, "No boats file supplied — names and boats taken from the mooring rows.")
+	}
 
 	const maxWarnings = 25 // enough to diagnose, not enough to bury the page
 	warn := func(format string, args ...interface{}) {
@@ -293,10 +310,10 @@ func buildLabels(moorings, boats [][]string, now time.Time) (buildResult, error)
 		}
 
 		switch {
-		case filledFromMooring:
+		case filledFromMooring && index != nil:
 			warn("Line %d: boat %q is incomplete in the boats file — filled in from the mooring row. Worth fixing in SCM.", line, boatID)
 		case boat == "" && owner == "":
-			warn("Line %d: boat %q is not in the boats file — label printed without a name.", line, boatID)
+			warn("Line %d: no boat or member name found for boat %q — label printed without one.", line, boatID)
 		}
 
 		berth := mcols.cell(row, "bertharea") + mcols.cell(row, "berthnumber")
